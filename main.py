@@ -5,6 +5,8 @@ from fastapi import Form
 import psycopg
 import secrets
 from urllib.parse import urlparse
+
+SHORT_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 from html import escape
 import os
 from dotenv import load_dotenv
@@ -611,13 +613,21 @@ def shorten(request: Request, long_url: Annotated[str, Form()]):
             detail="Please enter a valid URL starting with http:// or https://",
         )
 
-    code = secrets.token_urlsafe(6)
-
     with psycopg.connect(DATABASE_URL) as connection:
-        connection.execute(
-            "INSERT INTO links (code, long_url, owner_id) VALUES (%s, %s, %s)",
-            (code, long_url, browser_id),
-        )
+        while True:
+            code = "".join(secrets.choice(SHORT_CODE_ALPHABET) for _ in range(7))
+            inserted = connection.execute(
+                """
+                INSERT INTO links (code, long_url, owner_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (code) DO NOTHING
+                RETURNING code
+                """,
+                (code, long_url, browser_id),
+            ).fetchone()
+
+            if inserted is not None:
+                break
 
     short_url = f"{request.base_url}r/{code}"
 
