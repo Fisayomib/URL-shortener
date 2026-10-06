@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from typing import Annotated
 from fastapi import Form
-import sqlite3
+import psycopg
 import secrets
 from urllib.parse import urlparse
 from html import escape
@@ -11,10 +11,13 @@ from dotenv import load_dotenv
 from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()
-SESSION_SECRET = os.getenv("SESSION_SECRET")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is missing from the environment.")
 
+SESSION_SECRET = os.getenv("SESSION_SECRET")
 if not SESSION_SECRET:
-    raise RuntimeError("SESSION_SECRET is missing from your .env file.")
+    raise RuntimeError("SESSION_SECRET is missing from the environment.")
 
 app = FastAPI()
 
@@ -26,24 +29,16 @@ app.add_middleware(
     https_only=False,
 )
 
-DATABASE_NAME = "shortlinks.db"
-
 def init_db():
-    with sqlite3.connect(DATABASE_NAME) as connection:
+    with psycopg.connect(DATABASE_URL) as connection:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS links (
                 code TEXT PRIMARY KEY,
                 long_url TEXT NOT NULL,
-                owner_id TEXT
+                owner_id TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(links)")
-        }
-
-        if "owner_id" not in columns:
-            connection.execute("ALTER TABLE links ADD COLUMN owner_id TEXT")
 
 
 init_db()
@@ -55,9 +50,9 @@ def get_browser_id(request: Request) -> str:
         browser_id = secrets.token_urlsafe(32)
         request.session["browser_id"] = browser_id
 
-    with sqlite3.connect(DATABASE_NAME) as connection:
+    with psycopg.connect(DATABASE_URL) as connection:
         connection.execute(
-            "UPDATE links SET owner_id = ? WHERE owner_id IS NULL",
+            "UPDATE links SET owner_id = %s WHERE owner_id IS NULL",
             (browser_id,),
         )
 
@@ -363,9 +358,9 @@ footer {
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     browser_id = get_browser_id(request)
-    with sqlite3.connect(DATABASE_NAME) as connection:
+    with psycopg.connect(DATABASE_URL) as connection:
         links = connection.execute(
-            "SELECT code, long_url FROM links WHERE owner_id = ? ORDER BY rowid DESC",
+            "SELECT code, long_url FROM links WHERE owner_id = %s ORDER BY created_at DESC",
             (browser_id,),
         ).fetchall()
 
@@ -457,9 +452,9 @@ def shorten(request: Request, long_url: Annotated[str, Form()]):
 
     code = secrets.token_urlsafe(6)
 
-    with sqlite3.connect(DATABASE_NAME) as connection:
+    with psycopg.connect(DATABASE_URL) as connection:
         connection.execute(
-            "INSERT INTO links (code, long_url, owner_id) VALUES (?, ?, ?)",
+            "INSERT INTO links (code, long_url, owner_id) VALUES (%s, %s, %s)",
             (code, long_url, browser_id),
         )
 
@@ -510,9 +505,9 @@ def shorten(request: Request, long_url: Annotated[str, Form()]):
 
 @app.get("/r/{code}")
 def follow_short_link(code: str):
-    with sqlite3.connect(DATABASE_NAME) as connection:
+    with psycopg.connect(DATABASE_URL) as connection:
         row = connection.execute(
-            "SELECT long_url FROM links WHERE code = ?",
+            "SELECT long_url FROM links WHERE code = %s",
             (code,),
         ).fetchone()
 
