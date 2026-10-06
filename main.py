@@ -5,6 +5,7 @@ from fastapi import Form
 import sqlite3
 import secrets
 from urllib.parse import urlparse
+from html import escape
 
 app = FastAPI()
 
@@ -23,8 +24,22 @@ def init_db():
 init_db()
 
 @app.get("/", response_class=HTMLResponse)
-def home():
-    return """
+def home(request: Request):
+    with sqlite3.connect(DATABASE_NAME) as connection:
+        links = connection.execute(
+            "SELECT code, long_url FROM links ORDER BY rowid DESC"
+        ).fetchall()
+
+    if links:
+        links_html = "".join(
+            f'<li><a href="{request.base_url}r/{code}">'
+            f'{request.base_url}r/{code}</a> — {escape(long_url)}</li>'
+            for code, long_url in links
+        )
+    else:
+        links_html = "<li>No links yet.</li>"
+
+    return f"""
     <html>
         <head>
             <title>URL Shortener</title>
@@ -33,9 +48,12 @@ def home():
             <h1>URL Shortener</h1>
             <p>Paste a long URL and get a shorter one.</p>
             <form action="/shorten" method="post">
-            <input type="url" name="long_url" placeholder="https://example.com" required>
-            <button type="submit">Shorten</button>
+                <input type="url" name="long_url"
+                       placeholder="https://example.com" required>
+                <button type="submit">Shorten</button>
             </form>
+            <h2>Your links</h2>
+            <ul>{links_html}</ul>
         </body>
     </html>
     """
