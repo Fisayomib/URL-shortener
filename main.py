@@ -522,7 +522,7 @@ def home(request: Request):
                 '<li class="saved-link">'
                 '<div class="saved-link-main">'
                 f'<a class="saved-short-link" href="{safe_short_url}">'
-                f'{safe_short_url}</a>'
+                f'{escape(code)}</a>'
                 f'<p class="original-url">{escape(long_url)}</p>'
                 '</div>'
                 f'<div class="link-actions" data-url="{safe_short_url}">'
@@ -661,7 +661,7 @@ def shorten(request: Request, long_url: Annotated[str, Form()]):
                 </p>
 
                 <div class="short-url-box">
-                    <a href="{safe_short_url}">{safe_short_url}</a>
+                    <a href="{safe_short_url}">{escape(code)}</a>
                     <div class="link-actions" data-url="{safe_short_url}">
                         <button type="button" class="action-button copy-button" data-action="copy">Copy</button>
                         <button type="button" class="action-button" data-action="share">Share</button>
