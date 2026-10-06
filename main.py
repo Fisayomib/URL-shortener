@@ -6,8 +6,25 @@ import sqlite3
 import secrets
 from urllib.parse import urlparse
 from html import escape
+import os
+from dotenv import load_dotenv
+from starlette.middleware.sessions import SessionMiddleware
+
+load_dotenv()
+SESSION_SECRET = os.getenv("SESSION_SECRET")
+
+if not SESSION_SECRET:
+    raise RuntimeError("SESSION_SECRET is missing from your .env file.")
 
 app = FastAPI()
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    session_cookie="url_shortener_session",
+    same_site="lax",
+    https_only=False,
+)
 
 DATABASE_NAME = "shortlinks.db"
 
@@ -16,18 +33,43 @@ def init_db():
         connection.execute("""
             CREATE TABLE IF NOT EXISTS links (
                 code TEXT PRIMARY KEY,
-                long_url TEXT NOT NULL
+                long_url TEXT NOT NULL,
+                owner_id TEXT
             )
         """)
+
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(links)")
+        }
+
+        if "owner_id" not in columns:
+            connection.execute("ALTER TABLE links ADD COLUMN owner_id TEXT")
 
 
 init_db()
 
+def get_browser_id(request: Request) -> str:
+    browser_id = request.session.get("browser_id")
+
+    if browser_id is None:
+        browser_id = secrets.token_urlsafe(32)
+        request.session["browser_id"] = browser_id
+
+    with sqlite3.connect(DATABASE_NAME) as connection:
+        connection.execute(
+            "UPDATE links SET owner_id = ? WHERE owner_id IS NULL",
+            (browser_id,),
+        )
+
+    return browser_id
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
+    browser_id = get_browser_id(request)
     with sqlite3.connect(DATABASE_NAME) as connection:
         links = connection.execute(
-            "SELECT code, long_url FROM links ORDER BY rowid DESC"
+            "SELECT code, long_url FROM links WHERE owner_id = ? ORDER BY rowid DESC",
+            (browser_id,),
         ).fetchall()
 
     if links:
@@ -52,6 +94,11 @@ def home(request: Request):
                        placeholder="https://example.com" required>
                 <button type="submit">Shorten</button>
             </form>
+            <p><small>
+                Your saved links are tied to this browser. Clearing cookies or using another
+                browser or device will hide them from your list. Short links you have copied
+                will still work.
+            </small></p>
             <h2>Your links</h2>
             <ul>{links_html}</ul>
         </body>
@@ -60,6 +107,7 @@ def home(request: Request):
 
 @app.post("/shorten")
 def shorten(request: Request, long_url: Annotated[str, Form()]):
+    browser_id = get_browser_id(request)
     parsed_url = urlparse(long_url)
 
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
@@ -72,8 +120,8 @@ def shorten(request: Request, long_url: Annotated[str, Form()]):
 
     with sqlite3.connect(DATABASE_NAME) as connection:
         connection.execute(
-            "INSERT INTO links (code, long_url) VALUES (?, ?)",
-            (code, long_url),
+            "INSERT INTO links (code, long_url, owner_id) VALUES (?, ?, ?)",
+            (code, long_url, browser_id),
         )
 
     short_url = f"{request.base_url}r/{code}"
