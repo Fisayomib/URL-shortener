@@ -272,6 +272,73 @@ body {
     text-underline-offset: 3px;
 }
 
+.saved-link {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.saved-link-main {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.original-url {
+    margin: 6px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.link-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.action-button {
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: white;
+    color: var(--green);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    cursor: pointer;
+    transition: background 160ms ease, transform 160ms ease;
+}
+
+.action-button:hover {
+    transform: translateY(-1px);
+    background: var(--soft-green);
+}
+
+.action-button:focus-visible {
+    outline: 3px solid rgb(60 104 79 / 28%);
+    outline-offset: 2px;
+}
+
+.action-button.copy-button {
+    border-color: var(--green);
+    background: var(--green);
+    color: white;
+}
+
+.action-button.copy-button:hover {
+    background: var(--green-dark);
+}
+
+.action-feedback {
+    flex-basis: 100%;
+    min-height: 1em;
+    color: var(--green);
+    font-size: 12px;
+}
+
 footer {
     margin-top: 32px;
     color: var(--muted);
@@ -299,6 +366,15 @@ footer {
 
     .form-row button {
         min-height: 48px;
+    }
+
+    .saved-link {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .saved-link .link-actions {
+        width: 100%;
     }
 }
 
@@ -341,6 +417,11 @@ footer {
     text-underline-offset: 4px;
 }
 
+.short-url-box .link-actions {
+    justify-content: center;
+    margin-top: 14px;
+}
+
 .back-link {
     display: inline-block;
     margin-top: 22px;
@@ -355,6 +436,70 @@ footer {
 }
 """
 
+PAGE_SCRIPT = """
+async function copyShortUrl(url) {
+    if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+        return;
+    }
+
+    const textArea = document.createElement("textarea");
+    textArea.value = url;
+    textArea.style.position = "fixed";
+    textArea.style.opacity = "0";
+    document.body.appendChild(textArea);
+    textArea.select();
+    const copied = document.execCommand("copy");
+    textArea.remove();
+
+    if (!copied) {
+        throw new Error("Clipboard copy was not available");
+    }
+}
+
+document.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+
+    const actions = button.closest(".link-actions");
+    if (!actions) return;
+
+    const url = actions.dataset.url;
+    const feedback = actions.querySelector(".action-feedback");
+    feedback.textContent = "";
+
+    if (button.dataset.action === "copy") {
+        try {
+            await copyShortUrl(url);
+            feedback.textContent = "Link copied.";
+        } catch {
+            feedback.textContent = "Could not copy automatically. Please copy the link manually.";
+        }
+        return;
+    }
+
+    if (button.dataset.action === "share") {
+        if (navigator.share) {
+            try {
+                await navigator.share({ title: "A short link", url });
+                feedback.textContent = "Share menu opened.";
+            } catch (error) {
+                if (error.name !== "AbortError") {
+                    feedback.textContent = "Sharing could not be opened.";
+                }
+            }
+        } else {
+            try {
+                await copyShortUrl(url);
+                feedback.textContent = "Sharing is not available here, so the link was copied instead.";
+            } catch {
+                feedback.textContent = "Sharing is unavailable and the link could not be copied.";
+            }
+        }
+    }
+});
+"""
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     browser_id = get_browser_id(request)
@@ -365,11 +510,26 @@ def home(request: Request):
         ).fetchall()
 
     if links:
-        links_html = "".join(
-            f'<li><a href="{request.base_url}r/{code}">'
-            f'{request.base_url}r/{code}</a> — {escape(long_url)}</li>'
-            for code, long_url in links
-        )
+        links_html = ""
+
+        for code, long_url in links:
+            short_url = f"{request.base_url}r/{code}"
+            safe_short_url = escape(short_url, quote=True)
+
+            links_html += (
+                '<li class="saved-link">'
+                '<div class="saved-link-main">'
+                f'<a class="saved-short-link" href="{safe_short_url}">'
+                f'{safe_short_url}</a>'
+                f'<p class="original-url">{escape(long_url)}</p>'
+                '</div>'
+                f'<div class="link-actions" data-url="{safe_short_url}">'
+                '<button type="button" class="action-button copy-button" data-action="copy">Copy</button>'
+                '<button type="button" class="action-button" data-action="share">Share</button>'
+                '<span class="action-feedback" aria-live="polite"></span>'
+                '</div>'
+                '</li>'
+            )
     else:
         links_html = "<li>No links yet.</li>"
 
@@ -435,7 +595,8 @@ def home(request: Request):
 
             <footer>Made for useful links.</footer>
         </div>
-    </body>
+    <script>{PAGE_SCRIPT}</script>
+</body>
     </html>
     """
 
@@ -491,6 +652,11 @@ def shorten(request: Request, long_url: Annotated[str, Form()]):
 
                 <div class="short-url-box">
                     <a href="{safe_short_url}">{safe_short_url}</a>
+                    <div class="link-actions" data-url="{safe_short_url}">
+                        <button type="button" class="action-button copy-button" data-action="copy">Copy</button>
+                        <button type="button" class="action-button" data-action="share">Share</button>
+                        <span class="action-feedback" aria-live="polite"></span>
+                    </div>
                 </div>
 
                 <a class="back-link" href="/">← Back to your links</a>
@@ -499,6 +665,7 @@ def shorten(request: Request, long_url: Annotated[str, Form()]):
 
         <footer>Made for useful links.</footer>
     </div>
+<script>{PAGE_SCRIPT}</script>
 </body>
 </html>
 """)
