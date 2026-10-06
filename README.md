@@ -6,7 +6,7 @@ A small URL shortener built with FastAPI and SQLite.
 
 - Create a short link from a long URL
 - Redirect short links to their original URLs
-- View saved links on the homepage
+- View saved links in the browser used to create them
 
 ## Requirements
 
